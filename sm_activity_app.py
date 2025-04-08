@@ -141,7 +141,7 @@ with st.form("activity_form"):
 
         # 변경사항 저장 및 성공 메시지 표시
         wb.save(file_path)
-        st.success(f"✅ {selected_file_name} 파일에 성공적으로 추가되었고, 날짜 순으로 정렬되었습니다.")
+        st.success(f"✅ {selected_file_name} 파일에 성공적으로 추가되었고, 날짜 순으로 정렬되었습니다.\n\n**추가된 작업:** {task}")
 
 # 엑셀 파일 다운로드 버튼 생성
 with open(file_path, "rb") as f:
