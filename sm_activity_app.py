@@ -73,10 +73,18 @@ with st.form("activity_form"):
         "CCB", "적재", "시스템 운영", "월정기작업", "인수인계"
     ])
     task = st.text_input("TASK 제목")  # 작업 제목 입력
-    요청자 = st.text_input("요청자")  # 요청자 입력
-    it = st.text_input("IT 담당자", value="한상욱")  # IT 담당자 입력(기본값 설정)
-    cns = st.text_input("CNS 담당자", value="이정인")  # CNS 담당자 입력(기본값 설정)
-    개발자 = st.text_input("개발자", value="위승빈")  # 개발자 입력(기본값 설정)
+    
+    # 담당자 정보를 한 줄에 4개 컬럼으로 배치
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        요청자 = st.text_input("요청자")  # 요청자 입력
+    with col2:
+        it = st.text_input("IT 담당자", value="한상욱")  # IT 담당자 입력(기본값 설정)
+    with col3:
+        cns = st.text_input("CNS 담당자", value="이정인")  # CNS 담당자 입력(기본값 설정)
+    with col4:
+        개발자 = st.text_input("개발자", value="위승빈")  # 개발자 입력(기본값 설정)
+    
     결과 = st.selectbox("결과", ["진행 중", "완료", "보류", "기타"])  # 작업 결과 상태 선택
 
     # 양식 제출 버튼 생성
