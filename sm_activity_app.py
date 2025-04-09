@@ -46,11 +46,18 @@ if not os.path.exists(file_path):
     wb = Workbook()  # 새 엑셀 워크북 생성
     ws = wb.active  # 활성 워크시트 가져오기
     ws.title = sheet_name  # 워크시트 이름 설정
+    
     # 헤더 행 추가 및 스타일 적용
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num, value=header)
         cell.font = Font(bold=True)  # 헤더 텍스트 굵게 설정
         cell.alignment = Alignment(horizontal="center", vertical="center")  # 가운데 정렬
+    
+    # 특정 컬럼 너비 설정
+    ws.column_dimensions['E'].width = 30  # TASK 컬럼 (5번째 컬럼) 너비 설정
+    ws.column_dimensions['F'].width = 30  # 요청일 컬럼 (6번째 컬럼) 너비 설정
+    ws.column_dimensions['L'].width = 40  # 내용 컬럼 (12번째 컬럼) 너비 설정
+    
     wb.save(file_path)  # 파일 저장
 
 # 폼 외부에 날짜 선택 UI 배치 (콜백 함수 사용 가능)
@@ -114,6 +121,11 @@ with st.form("activity_form"):
         ws.cell(row=new_row, column=11, value=개발자)  # 개발자 데이터 추가
         ws.cell(row=new_row, column=12, value=task)  # 내용 컬럼에 TASK 제목 그대로 사용
         ws.cell(row=new_row, column=13, value=결과)  # 결과 데이터 추가
+        
+        # 컬럼 너비 설정 (매번 설정하여 일관성 유지)
+        ws.column_dimensions['E'].width = 30  # TASK 컬럼 (5번째 컬럼) 너비 설정
+        ws.column_dimensions['F'].width = 30  # 요청일 컬럼 (6번째 컬럼) 너비 설정
+        ws.column_dimensions['L'].width = 40  # 내용 컬럼 (12번째 컬럼) 너비 설정
         
         # 요청일 기준 정렬을 위한 설정
         sort_col_idx = 5  # 요청일 컬럼 인덱스 (6번째 컬럼, 0부터 시작하므로 5)
