@@ -48,16 +48,18 @@ def get_or_create_spreadsheet(client, sheet_name):
         # 스프레드시트 열기 시도
         spreadsheet = client.open(sheet_name)
         st.info(f"기존 스프레드시트를 열었습니다: {sheet_name}")
-        
-        # 기본 권한 설정
-        spreadsheet.share('qhv147@gmail.com', perm_type='user', role='editor')
     except gspread.exceptions.SpreadsheetNotFound:
         # 스프레드시트가 없으면 새로 생성
         spreadsheet = client.create(sheet_name)
         st.success(f"새 스프레드시트를 생성했습니다: {sheet_name}")
         
-        # 기본 권한 설정 (선택 사항)
-        # spreadsheet.share('your-email@example.com', perm_type='user', role='writer')
+        # 새로 생성된 스프레드시트만 공유 시도
+        try:
+            # 기본 권한 설정 - 자신에게 편집 권한 부여
+            spreadsheet.share('qhv147@gmail.com', perm_type='user', role='writer')
+            st.success("스프레드시트에 접근 권한이 부여되었습니다.")
+        except Exception as e:
+            st.warning(f"스프레드시트 공유 중 오류가 발생했습니다: {str(e)[:100]}... 나중에 수동으로 공유해주세요.")
     
     return spreadsheet
 
