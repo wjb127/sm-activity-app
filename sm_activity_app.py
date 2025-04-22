@@ -246,9 +246,42 @@ if not worksheet:
 st.markdown(f"### 📊 Google 스프레드시트")
 st.markdown(f"""
 <div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
-    <p><strong>스프레드시트 링크:</strong> <a href='{spreadsheet.url}' target='_blank'>{google_sheet_name}</a></p>
-    <p><small>만약 접근 권한이 없다면 다시 앱을 로드하거나, 스프레드시트 소유자에게 '{gs_client.auth.service_account_email}' 서비스 계정으로부터의 공유 요청을 수락해달라고 요청하세요.</small></p>
-    <p><small>또는 '{gs_client.auth.service_account_email}'를 검색하여 메일함에서 공유 초대를 확인하세요.</small></p>
+    <p><strong>현재 선택된 스프레드시트:</strong> <a href='{spreadsheet.url}' target='_blank'>{google_sheet_name}</a></p>
+    
+    <details>
+        <summary><strong>모든 스프레드시트 링크</strong></summary>
+        <ul>
+""", unsafe_allow_html=True)
+
+# 모든 스프레드시트 링크 표시
+for sheet_label, sheet_name in sheet_options.items():
+    # 현재 선택된 시트인지 확인
+    is_current = sheet_name == google_sheet_name
+    try:
+        # 해당 스프레드시트가 존재하는지 확인
+        sheet_exists = True
+        try:
+            temp_sheet = gs_client.open(sheet_name)
+            sheet_url = temp_sheet.url
+        except gspread.exceptions.SpreadsheetNotFound:
+            sheet_exists = False
+            sheet_url = "#"
+        
+        if sheet_exists:
+            if is_current:
+                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_url}' target='_blank'>{sheet_name}</a> (현재 선택됨)</li>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_url}' target='_blank'>{sheet_name}</a></li>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<li><strong>{sheet_label}</strong>: {sheet_name} (아직 생성되지 않음)</li>", unsafe_allow_html=True)
+    except Exception as e:
+        st.markdown(f"<li><strong>{sheet_label}</strong>: {sheet_name} (링크 확인 중 오류 발생)</li>", unsafe_allow_html=True)
+
+st.markdown("""
+        </ul>
+    </details>
+    
+    <p><small>만약 접근 권한이 없다면 다시 앱을 로드하거나, 스프레드시트 소유자에게 권한을 요청하세요.</small></p>
 </div>
 """, unsafe_allow_html=True)
 
