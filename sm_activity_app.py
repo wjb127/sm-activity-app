@@ -4,13 +4,113 @@ from openpyxl.styles import Font, Alignment  # 엑셀 셀 서식 지정용 스�
 from datetime import datetime  # 날짜 및 시간 처리를 위한 라이브러리
 import os  # 파일 및 디렉토리 조작을 위한 라이브러리
 import pandas as pd  # 데이터 처리를 위한 라이브러리
+import gspread  # Google Sheets API 연동
+from google.oauth2.service_account import Credentials  # Google API 인증
+from io import BytesIO  # 메모리 내 파일 처리
 
-# 데이터 디렉토리 경로 설정 (OS 독립적으로)
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# Google Sheets API 설정
+def setup_google_sheets():
+    try:
+        scope = [
+            'https://spreadsheets.google.com/feeds',
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        # Streamlit 로컬 개발 환경인지 클라우드 환경인지 확인
+        if os.path.exists('.streamlit/secrets.toml'):
+            # 로컬 개발 환경일 경우
+            credentials = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=scope
+            )
+        else:
+            try:
+                # Streamlit Cloud 환경일 경우
+                credentials = Credentials.from_service_account_info(
+                    st.secrets["gcp_service_account"],
+                    scopes=scope
+                )
+            except Exception as e:
+                st.error(f"Google API 인증 정보를 찾을 수 없습니다: {e}")
+                st.info("관리자에게 문의하세요. Streamlit Secrets에 서비스 계정 정보가 필요합니다.")
+                return None
+        
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        st.error(f"Google Sheets API 설정 중 오류가 발생했습니다: {e}")
+        return None
 
-# 데이터 디렉토리가 없으면 생성
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR, exist_ok=True)
+# 스프레드시트 열기 또는 생성
+def get_or_create_spreadsheet(client, sheet_name):
+    try:
+        # 스프레드시트 열기 시도
+        spreadsheet = client.open(sheet_name)
+        st.info(f"기존 스프레드시트를 열었습니다: {sheet_name}")
+    except gspread.exceptions.SpreadsheetNotFound:
+        # 스프레드시트가 없으면 새로 생성
+        spreadsheet = client.create(sheet_name)
+        st.success(f"새 스프레드시트를 생성했습니다: {sheet_name}")
+        
+        # 기본 권한 설정 (선택 사항)
+        # spreadsheet.share('your-email@example.com', perm_type='user', role='writer')
+    
+    return spreadsheet
+
+# 워크시트 가져오기 또는 생성
+def get_or_create_worksheet(spreadsheet, worksheet_name):
+    try:
+        # 워크시트 열기 시도
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        # 워크시트가 없으면 새로 생성
+        worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
+        
+        # 헤더 추가
+        headers = [
+            "NO", "월", "구분", "작업유형", "TASK", "요청일", "작업일",
+            "요청자", "IT", "CNS", "개발자", "내용", "결과"
+        ]
+        worksheet.append_row(headers)
+        
+        # 열 너비 설정 (Google Sheets API에서는 직접 지원하지 않음)
+    
+    return worksheet
+
+# 데이터 정렬 함수 (요청일 기준)
+def sort_worksheet_by_date(worksheet):
+    # 모든 데이터 가져오기 (헤더 포함)
+    all_data = worksheet.get_all_values()
+    if len(all_data) <= 1:  # 헤더만 있거나 비어있으면 정렬 필요 없음
+        return
+    
+    # 헤더와 데이터 분리
+    headers = all_data[0]
+    data = all_data[1:]
+    
+    # 요청일 열 인덱스 (6번째 열, 0-기반 인덱스로 5)
+    date_column_index = 5
+    
+    # 요청일 기준 정렬
+    try:
+        sorted_data = sorted(
+            data, 
+            key=lambda x: datetime.strptime(x[date_column_index], "%Y-%m-%d") if x[date_column_index] else datetime.min
+        )
+    except Exception as e:
+        st.warning(f"데이터 정렬 중 오류가 발생했습니다: {e}")
+        return
+    
+    # 정렬된 데이터에 NO 재할당
+    for i, row in enumerate(sorted_data, 1):
+        row[0] = str(i)  # NO 열 업데이트
+    
+    # 워크시트 초기화 및 데이터 다시 쓰기
+    worksheet.clear()
+    worksheet.append_row(headers)
+    for row in sorted_data:
+        worksheet.append_row(row)
 
 # 세션 상태 초기화 - 요청일과 작업일 동기화를 위한 설정
 if 'req_date' not in st.session_state:
@@ -26,52 +126,39 @@ def update_work_date():
 # Streamlit UI - 웹 애플리케이션 제목 설정
 st.title("🛠 SM Activity 기록 프로그램")
 
-# 파일 선택 옵션 - 사용자가 선택할 수 있는 엑셀 파일 옵션 정의
-file_options = {
-    "SM Activity - 대시보드": os.path.join(DATA_DIR, "SM_Activity_Dashboard.xlsx"),
-    "SM Activity - Plan": os.path.join(DATA_DIR, "SM_Activity_Plan.xlsx")
+# Google Sheets API 클라이언트 초기화
+gs_client = setup_google_sheets()
+if not gs_client:
+    st.error("Google Sheets API에 연결할 수 없습니다.")
+    st.stop()
+
+# 파일 선택 옵션 - 사용자가 선택할 수 있는 스프레드시트 옵션 정의
+sheet_options = {
+    "SM Activity - 대시보드": "SM Activity Dashboard",
+    "SM Activity - Plan": "SM Activity Plan"
 }
 
-# 사용자가 작업할 파일 선택을 위한 드롭다운 생성
-selected_file_name = st.selectbox(
+# 사용자가 작업할 스프레드시트 선택을 위한 드롭다운 생성
+selected_sheet_name = st.selectbox(
     "작성할 문서 선택", 
-    options=list(file_options.keys())
+    options=list(sheet_options.keys())
 )
 
-# 선택된 파일 경로 설정
-file_path = file_options[selected_file_name]
-sheet_name = "SM Activity"  # 모든 파일에 동일한 시트 이름 사용
+# 선택된 스프레드시트 이름 설정
+google_sheet_name = sheet_options[selected_sheet_name]
+worksheet_name = "SM Activity"  # 모든 시트에 동일한 워크시트 이름 사용
 
-# 엑셀 파일 헤더 설정 (모든 파일 형식 동일)
-headers = [
-    "NO", "월", "구분", "작업유형", "TASK", "요청일", "작업일",
-    "요청자", "IT", "CNS", "개발자", "내용", "결과"
-]
+# 선택한 스프레드시트 열기 또는 생성
+spreadsheet = get_or_create_spreadsheet(gs_client, google_sheet_name)
+if not spreadsheet:
+    st.error("스프레드시트에 접근할 수 없습니다.")
+    st.stop()
 
-# 선택한 파일이 없으면 새로 생성하는 로직
-if not os.path.exists(file_path):
-    os.makedirs(DATA_DIR, exist_ok=True)  # data 디렉토리가 없으면 생성
-    wb = Workbook()  # 새 엑셀 워크북 생성
-    ws = wb.active  # 활성 워크시트 가져오기
-    ws.title = sheet_name  # 워크시트 이름 설정
-    
-    # 헤더 행 추가 및 스타일 적용
-    for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_num, value=header)
-        cell.font = Font(bold=True)  # 헤더 텍스트 굵게 설정
-        cell.alignment = Alignment(horizontal="center", vertical="center")  # 가운데 정렬
-    
-    # 특정 컬럼 너비 설정
-    ws.column_dimensions['E'].width = 30  # TASK 컬럼 (5번째 컬럼) 너비 설정
-    ws.column_dimensions['F'].width = 30  # 요청일 컬럼 (6번째 컬럼) 너비 설정
-    ws.column_dimensions['L'].width = 40  # 내용 컬럼 (12번째 컬럼) 너비 설정
-    
-    # 파일 저장 시 예외 처리 추가
-    try:
-        wb.save(file_path)  # 파일 저장
-    except Exception as e:
-        st.error(f"파일 저장 중 오류가 발생했습니다: {e}")
-        st.info("Streamlit Cloud에서는 새로운 파일이 생성되지 않을 수 있으며, 이 경우 샘플 파일을 미리 업로드해야 합니다.")
+# 워크시트 열기 또는 생성
+worksheet = get_or_create_worksheet(spreadsheet, worksheet_name)
+if not worksheet:
+    st.error("워크시트에 접근할 수 없습니다.")
+    st.stop()
 
 # 폼 외부에 날짜 선택 UI 배치 (콜백 함수 사용 가능)
 st.subheader("📅 날짜 설정")
@@ -81,7 +168,7 @@ with col1:
 with col2:
     st.date_input("작업일 확인", key="work_date", disabled=True)
 
-# SM Activity 입력 양식 생성 (모든 파일 형식 동일)
+# SM Activity 입력 양식 생성
 with st.form("activity_form"):
     # 각 필드 입력 UI 요소 생성
     st.subheader("📝 작업 정보 입력")
@@ -113,88 +200,95 @@ with st.form("activity_form"):
     # 양식이 제출되면 실행되는 로직
     if submitted:
         try:
+            # 입력값 검증
+            if not task:
+                st.error("TASK 제목을 입력해주세요.")
+                st.stop()
+            
             요청일 = st.session_state.req_date  # 폼 외부에서 설정한 요청일 사용
             작업일 = st.session_state.work_date  # 폼 외부에서 설정한 작업일 사용
             
-            # 파일이 존재하는지 다시 한번 확인
-            if not os.path.exists(file_path):
-                st.error(f"파일이 존재하지 않습니다: {file_path}")
-                st.info("Streamlit Cloud에서는 파일 경로 문제가 발생할 수 있습니다. 관리자에게 문의하세요.")
-                st.stop()
+            # 현재 워크시트의 모든 데이터 가져오기
+            sheet_data = worksheet.get_all_values()
+            # 헤더 행을 제외한 데이터 행 수 계산
+            current_row_count = len(sheet_data) - 1 if len(sheet_data) > 0 else 0
             
-            # 엑셀 파일 열기
-            wb = load_workbook(file_path)
-            ws = wb[sheet_name]
-            new_row = ws.max_row + 1  # 새로운 데이터를 추가할 행 번호 계산
-
-            # 입력된 데이터를 엑셀에 작성
-            ws.cell(row=new_row, column=1, value=new_row - 1)  # NO 자동 번호 부여
-            ws.cell(row=new_row, column=2, value=요청일.strftime("%Y%m"))  # 월 정보 (YYYYMM 형식)
-            ws.cell(row=new_row, column=3, value=구분)  # 구분 데이터 추가
-            ws.cell(row=new_row, column=4, value=작업유형)  # 작업유형 데이터 추가
-            ws.cell(row=new_row, column=5, value=task)  # TASK 제목 데이터 추가
-            ws.cell(row=new_row, column=6, value=요청일.strftime("%Y-%m-%d"))  # 요청일 형식 변환 후 추가
-            ws.cell(row=new_row, column=7, value=작업일.strftime("%Y-%m-%d"))  # 작업일 형식 변환 후 추가
-            ws.cell(row=new_row, column=8, value=요청자)  # 요청자 데이터 추가
-            ws.cell(row=new_row, column=9, value=it)  # IT 담당자 데이터 추가
-            ws.cell(row=new_row, column=10, value=cns)  # CNS 담당자 데이터 추가
-            ws.cell(row=new_row, column=11, value=개발자)  # 개발자 데이터 추가
-            ws.cell(row=new_row, column=12, value=task)  # 내용 컬럼에 TASK 제목 그대로 사용
-            ws.cell(row=new_row, column=13, value=결과)  # 결과 데이터 추가
+            # 새 행 번호 계산
+            new_row_num = current_row_count + 1
             
-            # 컬럼 너비 설정 (매번 설정하여 일관성 유지)
-            ws.column_dimensions['E'].width = 30  # TASK 컬럼 (5번째 컬럼) 너비 설정
-            ws.column_dimensions['F'].width = 30  # 요청일 컬럼 (6번째 컬럼) 너비 설정
-            ws.column_dimensions['L'].width = 40  # 내용 컬럼 (12번째 컬럼) 너비 설정
+            # 데이터 준비
+            new_row_data = [
+                str(new_row_num),  # NO
+                요청일.strftime("%Y%m"),  # 월 정보 (YYYYMM 형식)
+                구분,  # 구분
+                작업유형,  # 작업유형
+                task,  # TASK
+                요청일.strftime("%Y-%m-%d"),  # 요청일
+                작업일.strftime("%Y-%m-%d"),  # 작업일
+                요청자,  # 요청자
+                it,  # IT 담당자
+                cns,  # CNS 담당자
+                개발자,  # 개발자
+                task,  # 내용 (TASK와 동일하게 설정)
+                결과  # 결과
+            ]
             
-            # 요청일 기준 정렬을 위한 설정
-            sort_col_idx = 5  # 요청일 컬럼 인덱스 (6번째 컬럼, 0부터 시작하므로 5)
-            date_format = "%Y-%m-%d"  # 날짜 형식
-
-            # 시트의 모든 데이터를 읽어 리스트에 저장 (빈 행 제외)
-            data = []
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if all(cell is None for cell in row):  # 모든 셀이 비어있으면 건너뛰기
-                    continue
-                data.append(row)
+            # Google 스프레드시트에 데이터 추가
+            worksheet.append_row(new_row_data)
             
             # 요청일 기준으로 데이터 정렬
-            data.sort(key=lambda x: datetime.strptime(str(x[sort_col_idx]), date_format) if x[sort_col_idx] else datetime.min)
-
-            # 정렬된 데이터를 다시 엑셀에 쓰기
-            for i, row_data in enumerate(data, start=2):
-                for j, value in enumerate(row_data, start=1):
-                    ws.cell(row=i, column=j, value=value)
-
-            # 정렬 후 남은 행이 있으면 내용 삭제 (중복 방지)
-            for row in range(len(data) + 2, ws.max_row + 1):
-                for col in range(1, ws.max_column + 1):
-                    ws.cell(row=row, column=col, value=None)
-
-            # 변경사항 저장 및 성공 메시지 표시
-            try:
-                wb.save(file_path)
-                st.success(f"✅ {selected_file_name} 파일에 성공적으로 추가되었고, 날짜 순으로 정렬되었습니다.\n\n**추가된 작업:** {task}")
-            except Exception as e:
-                st.error(f"파일 저장 중 오류가 발생했습니다: {e}")
-                st.info("Streamlit Cloud에서는 파일 쓰기 권한이 제한될 수 있습니다. 이 경우 로컬에서 실행하거나 다른 저장 방식이 필요합니다.")
+            sort_worksheet_by_date(worksheet)
+            
+            # 성공 메시지 표시
+            st.success(f"✅ {selected_sheet_name} 문서에 성공적으로 추가되었고, 날짜 순으로 정렬되었습니다.\n\n**추가된 작업:** {task}")
+            
+            # 스프레드시트 링크 제공
+            st.markdown(f"[Google 스프레드시트에서 보기]({spreadsheet.url})")
+            
         except Exception as e:
-            st.error(f"처리 중 오류가 발생했습니다: {e}")
+            st.error(f"데이터 추가 중 오류가 발생했습니다: {e}")
 
-# 파일이 존재하는 경우에만 다운로드 버튼 표시
-if os.path.exists(file_path):
-    try:
-        with open(file_path, "rb") as f:
-            st.download_button(
-                label=f"📥 {selected_file_name} 엑셀 다운로드",
-                data=f,
-                file_name=os.path.basename(file_path),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-    except Exception as e:
-        st.error(f"파일 다운로드 준비 중 오류가 발생했습니다: {e}")
-else:
-    st.warning(f"다운로드할 파일이 존재하지 않습니다: {file_path}")
+# 현재 워크시트의 모든 데이터 가져와서 표시
+try:
+    sheet_data = worksheet.get_all_values()
+    if len(sheet_data) > 1:  # 헤더 행을 제외하고 데이터가 있는 경우
+        st.subheader("📊 현재 기록된 데이터")
+        df = pd.DataFrame(sheet_data[1:], columns=sheet_data[0])
+        st.dataframe(df)
+        
+        # 엑셀 파일로 변환하여 다운로드 버튼 제공
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=worksheet_name)
+            
+            # 엑셀 서식 설정
+            workbook = writer.book
+            worksheet = writer.sheets[worksheet_name]
+            
+            # 헤더 스타일 설정
+            for col_num, value in enumerate(df.columns.values, 1):
+                cell = worksheet.cell(row=1, column=col_num)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # 열 너비 설정
+            worksheet.column_dimensions['E'].width = 30  # TASK 컬럼
+            worksheet.column_dimensions['F'].width = 15  # 요청일 컬럼
+            worksheet.column_dimensions['G'].width = 15  # 작업일 컬럼
+            worksheet.column_dimensions['L'].width = 40  # 내용 컬럼
+        
+        excel_buffer.seek(0)
+        
+        st.download_button(
+            label=f"📥 {selected_sheet_name} 엑셀 다운로드",
+            data=excel_buffer,
+            file_name=f"{google_sheet_name}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("아직 기록된 데이터가 없습니다. 위 양식을 통해 새 활동을 추가해주세요.")
+except Exception as e:
+    st.error(f"데이터 조회 중 오류가 발생했습니다: {e}")
 
 # 도움말 섹션 추가
 with st.expander("ℹ️ 도움말 및 사용 방법"):
@@ -204,9 +298,9 @@ with st.expander("ℹ️ 도움말 및 사용 방법"):
     2. 요청일을 선택하면 작업일이 자동으로 설정됩니다.
     3. 작업 정보를 입력하고 '추가하기' 버튼을 클릭합니다.
     4. 입력된 데이터는 자동으로 날짜순 정렬됩니다.
-    5. 엑셀 파일을 다운로드하여 사용할 수 있습니다.
+    5. 엑셀 파일을 다운로드하거나 Google 스프레드시트 링크를 통해 직접 확인할 수 있습니다.
     
     ### 주의사항
-    - Streamlit Cloud에서는 파일 쓰기에 제한이 있을 수 있습니다.
-    - 문제가 발생하면 로컬에서 실행하거나 관리자에게 문의하세요.
+    - 데이터는 Google 스프레드시트에 저장되며, 권한이 있는 사용자만 접근할 수 있습니다.
+    - 문제가 발생하면 관리자에게 문의하세요.
     """)
