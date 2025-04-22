@@ -7,6 +7,8 @@ import pandas as pd  # 데이터 처리를 위한 라이브러리
 import gspread  # Google Sheets API 연동
 from google.oauth2.service_account import Credentials  # Google API 인증
 from io import BytesIO  # 메모리 내 파일 처리
+import logging  # 로깅을 위한 라이브러리
+import time  # 시간 처리를 위한 라이브러리
 
 # Google Sheets API 설정
 def setup_google_sheets():
@@ -48,16 +50,45 @@ def get_or_create_spreadsheet(client, sheet_name):
         # 스프레드시트 열기 시도
         spreadsheet = client.open(sheet_name)
         st.info(f"기존 스프레드시트를 열었습니다: {sheet_name}")
+        
+        # 기존 스프레드시트에도 권한 부여 시도
+        try:
+            # 현재 사용자 이메일 주소
+            user_email = 'qhv147@gmail.com'
+            
+            # 이미 접근 권한이 있는지 확인 (API 호출을 줄이기 위함)
+            try:
+                # 현재 권한 목록 가져오기
+                permissions = spreadsheet.list_permissions()
+                existing_emails = [p.get('emailAddress', '') for p in permissions]
+                
+                # 이미 권한이 있으면 건너뛰기
+                if user_email in existing_emails:
+                    st.info("이미 스프레드시트에 대한 접근 권한이 있습니다.")
+                else:
+                    # 권한 부여 시도
+                    spreadsheet.share(user_email, perm_type='user', role='writer')
+                    st.success("기존 스프레드시트에 접근 권한이 부여되었습니다.")
+            except:
+                # 권한 목록 조회 실패 시 그냥 공유 시도
+                spreadsheet.share(user_email, perm_type='user', role='writer')
+                st.success("기존 스프레드시트에 접근 권한이 부여되었습니다.")
+                
+        except Exception as e:
+            st.warning(f"기존 스프레드시트 공유 중 오류가 발생했습니다: {str(e)[:100]}... 스프레드시트 소유자에게 권한을 요청하세요.")
+            # 스프레드시트 URL과 함께 자세한 안내 제공
+            st.info(f"이 스프레드시트({sheet_name})에 접근하려면 소유자에게 '{user_email}' 계정에 대한 권한을 요청하세요.")
+            
     except gspread.exceptions.SpreadsheetNotFound:
         # 스프레드시트가 없으면 새로 생성
         spreadsheet = client.create(sheet_name)
         st.success(f"새 스프레드시트를 생성했습니다: {sheet_name}")
         
-        # 새로 생성된 스프레드시트만 공유 시도
+        # 새로 생성된 스프레드시트에 공유 시도
         try:
             # 기본 권한 설정 - 자신에게 편집 권한 부여
             spreadsheet.share('qhv147@gmail.com', perm_type='user', role='writer')
-            st.success("스프레드시트에 접근 권한이 부여되었습니다.")
+            st.success("새 스프레드시트에 접근 권한이 부여되었습니다.")
         except Exception as e:
             st.warning(f"스프레드시트 공유 중 오류가 발생했습니다: {str(e)[:100]}... 나중에 수동으로 공유해주세요.")
     
@@ -85,37 +116,83 @@ def get_or_create_worksheet(spreadsheet, worksheet_name):
 
 # 데이터 정렬 함수 (요청일 기준)
 def sort_worksheet_by_date(worksheet):
-    # 모든 데이터 가져오기 (헤더 포함)
-    all_data = worksheet.get_all_values()
-    if len(all_data) <= 1:  # 헤더만 있거나 비어있으면 정렬 필요 없음
-        return
-    
-    # 헤더와 데이터 분리
-    headers = all_data[0]
-    data = all_data[1:]
-    
-    # 요청일 열 인덱스 (6번째 열, 0-기반 인덱스로 5)
-    date_column_index = 5
-    
-    # 요청일 기준 정렬
+    """
+    날짜 기준으로 워크시트 데이터를 정렬합니다.
+    """
     try:
-        sorted_data = sorted(
-            data, 
-            key=lambda x: datetime.strptime(x[date_column_index], "%Y-%m-%d") if x[date_column_index] else datetime.min
-        )
+        # 모든 데이터 가져오기
+        data = worksheet.get_all_values()
+        
+        # 헤더 제외하고 데이터만 가져오기
+        headers = data[0]
+        data_rows = data[1:]
+        
+        # 데이터 없으면 바로 반환
+        if not data_rows:
+            return
+            
+        # 이미 정렬되어 있는지 확인
+        date_col_idx = 5  # 요청일 열 인덱스 (6번째 열, 0부터 시작)
+        
+        # 날짜 형식 변환 함수
+        def parse_date(date_str):
+            try:
+                # '2023-12-31' 형식의 날짜 처리
+                return datetime.strptime(date_str, '%Y-%m-%d')
+            except ValueError:
+                try:
+                    # '23-12-31' 등의 2자리 연도 형식 처리
+                    parsed_date = datetime.strptime(date_str, '%y-%m-%d')
+                    # 2000년 이전인지 확인 및 조정
+                    current_year = datetime.now().year
+                    century = (current_year // 100) * 100
+                    if parsed_date.year > (current_year % 100):
+                        # 과거 날짜로 가정
+                        parsed_date = parsed_date.replace(year=parsed_date.year + century - 100)
+                    else:
+                        # 현재 세기로 가정
+                        parsed_date = parsed_date.replace(year=parsed_date.year + century)
+                    return parsed_date
+                except ValueError:
+                    # 다른 형식이거나 유효하지 않은 날짜는 매우 오래된 날짜로 처리
+                    return datetime(1900, 1, 1)
+        
+        # 정렬 필요 여부 확인
+        is_sorted = True
+        for i in range(1, len(data_rows)):
+            prev_date = parse_date(data_rows[i-1][date_col_idx])
+            curr_date = parse_date(data_rows[i][date_col_idx])
+            if prev_date > curr_date:
+                is_sorted = False
+                break
+                
+        if is_sorted:
+            return  # 이미 정렬되어 있음
+        
+        # 날짜 기준으로 정렬 (오래된 날짜가 위로)
+        sorted_data = sorted(data_rows, key=lambda x: parse_date(x[date_col_idx]))
+        
+        # 배치 업데이트를 위한 준비
+        batch_size = 100  # 한 번에 업데이트할 최대 행 수
+        total_batches = (len(sorted_data) + batch_size - 1) // batch_size
+        
+        # 헤더는 그대로 두고 정렬된 데이터만 업데이트
+        for i in range(0, len(sorted_data), batch_size):
+            batch = sorted_data[i:i+batch_size]
+            start_row = i + 2  # 헤더(1) + 데이터 시작 인덱스(i+1)
+            
+            # 배치 단위로 업데이트
+            worksheet.update(f'A{start_row}', batch)
+            
+            # API 할당량 제한을 고려한 딜레이
+            if i + batch_size < len(sorted_data):
+                time.sleep(2)  # 2초 대기
+                
+        return True
+        
     except Exception as e:
-        st.warning(f"데이터 정렬 중 오류가 발생했습니다: {e}")
-        return
-    
-    # 정렬된 데이터에 NO 재할당
-    for i, row in enumerate(sorted_data, 1):
-        row[0] = str(i)  # NO 열 업데이트
-    
-    # 워크시트 초기화 및 데이터 다시 쓰기
-    worksheet.clear()
-    worksheet.append_row(headers)
-    for row in sorted_data:
-        worksheet.append_row(row)
+        logging.error(f"워크시트 정렬 중 오류: {str(e)}")
+        raise Exception(f"데이터 정렬 중 오류가 발생했습니다: {str(e)}")
 
 # 세션 상태 초기화 - 요청일과 작업일 동기화를 위한 설정
 if 'req_date' not in st.session_state:
@@ -166,7 +243,14 @@ if not worksheet:
     st.stop()
 
 # 스프레드시트 링크 항상 표시
-st.markdown(f"### 📊 [Google 스프레드시트에서 보기]({spreadsheet.url})")
+st.markdown(f"### 📊 Google 스프레드시트")
+st.markdown(f"""
+<div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
+    <p><strong>스프레드시트 링크:</strong> <a href='{spreadsheet.url}' target='_blank'>{google_sheet_name}</a></p>
+    <p><small>만약 접근 권한이 없다면 다시 앱을 로드하거나, 스프레드시트 소유자에게 '{gs_client.auth.service_account_email}' 서비스 계정으로부터의 공유 요청을 수락해달라고 요청하세요.</small></p>
+    <p><small>또는 '{gs_client.auth.service_account_email}'를 검색하여 메일함에서 공유 초대를 확인하세요.</small></p>
+</div>
+""", unsafe_allow_html=True)
 
 # 엑셀 파일 업로드 섹션 추가
 st.subheader("📤 엑셀 파일 업로드")
@@ -227,21 +311,23 @@ with st.expander("엑셀 파일을 업로드하여 데이터 일괄 추가"):
                     # 헤더 행을 제외한 데이터 행 수 계산
                     current_row_count = len(sheet_data) - 1 if len(sheet_data) > 0 else 0
                     
-                    # 성공 및 실패 카운터
-                    success_count = 0
-                    error_count = 0
-                    
                     # 진행 상황 표시
                     progress_bar = st.progress(0)
                     status_text = st.empty()
+                    status_text.text("데이터 처리 중...")
                     
-                    # 각 행을 순회하면서 데이터 추가
+                    # 배치로 추가할 모든 행 준비
+                    all_rows_to_add = []
+                    error_rows = []
+                    
+                    # 각 행을 순회하면서 데이터 준비
                     for index, row in df.iterrows():
                         try:
-                            # 진행 상황 업데이트
-                            progress = (index + 1) / len(df)
-                            progress_bar.progress(progress)
-                            status_text.text(f"처리 중... {index + 1}/{len(df)}")
+                            # 진행 상황 업데이트 (10개 단위로 표시 업데이트)
+                            if index % 10 == 0 or index == len(df) - 1:
+                                progress = (index + 1) / len(df)
+                                progress_bar.progress(progress)
+                                status_text.text(f"처리 중... {index + 1}/{len(df)}")
                             
                             # 요청일 처리 (날짜 형식 확인)
                             try:
@@ -259,7 +345,7 @@ with st.expander("엑셀 파일을 업로드하여 데이터 일괄 추가"):
                             work_date = req_date
                             
                             # 새 행 번호 계산
-                            new_row_num = current_row_count + success_count + 1
+                            new_row_num = current_row_count + len(all_rows_to_add) + 1
                             
                             # 데이터 준비
                             new_row_data = [
@@ -278,24 +364,63 @@ with st.expander("엑셀 파일을 업로드하여 데이터 일괄 추가"):
                                 str(row.get('결과', '완료'))  # 결과
                             ]
                             
-                            # Google 스프레드시트에 데이터 추가
-                            worksheet.append_row(new_row_data)
-                            success_count += 1
+                            # 배열에 추가
+                            all_rows_to_add.append(new_row_data)
                             
                         except Exception as e:
-                            error_count += 1
+                            error_rows.append(index)
                             st.error(f"행 {index+1} 처리 중 오류 발생: {str(e)[:100]}...")
                     
-                    # 진행 상황 완료
-                    progress_bar.progress(1.0)
-                    status_text.text("처리 완료!")
+                    # 배치 처리를 위한 상태 업데이트
+                    status_text.text("Google 스프레드시트에 데이터 추가 중...")
                     
-                    # 요청일 기준으로 데이터 정렬
                     try:
-                        sort_worksheet_by_date(worksheet)
-                        st.success(f"✅ 업로드 완료! 총 {success_count}개 행이 성공적으로 추가되었습니다. (오류: {error_count}개)")
+                        # 배치 단위로 나누어 추가 (API 할당량 고려)
+                        batch_size = 25  # 한 번에 추가할 최대 행 수 감소
+                        success_count = 0
+                        
+                        for i in range(0, len(all_rows_to_add), batch_size):
+                            batch = all_rows_to_add[i:i+batch_size]
+                            if batch:
+                                # 배치 단위로 데이터 추가
+                                worksheet.append_rows(batch)
+                                success_count += len(batch)
+                                
+                                # 배치 추가 후 진행 상황 업데이트
+                                batch_progress = min(1.0, (i + len(batch)) / len(all_rows_to_add))
+                                progress_bar.progress(batch_progress)
+                                status_text.text(f"추가 중... {i + len(batch)}/{len(all_rows_to_add)} 행")
+                                
+                                # API 할당량 제한을 고려한 딜레이 (필요시)
+                                if i + batch_size < len(all_rows_to_add):
+                                    status_text.text(f"API 할당량 제한 방지를 위해 잠시 대기 중... ({(i + len(batch))}/{len(all_rows_to_add)} 완료)")
+                                    time.sleep(3)  # 3초로 대기 시간 증가
+                        
+                        # 진행 상황 완료
+                        progress_bar.progress(1.0)
+                        status_text.text("처리 완료! 데이터 정렬 중...")
+                        
+                        # 요청일 기준으로 데이터 정렬
+                        try:
+                            sort_worksheet_by_date(worksheet)
+                            st.success(f"✅ 업로드 완료! 총 {success_count}개 행이 성공적으로 추가되었습니다. (오류: {len(error_rows)}개)")
+                            if error_rows:
+                                st.warning(f"일부 행({len(error_rows)}개)에서 오류가 발생했습니다. 해당 행: {', '.join(map(str, [r+1 for r in error_rows]))}")
+                        except Exception as e:
+                            st.warning(f"데이터는 추가되었으나 정렬 중 오류가 발생했습니다: {str(e)[:150]}...")
+                            st.info("API 할당량 제한으로 인한 오류일 수 있습니다. 1-2시간 후에 다시 시도하거나, 단일 항목을 추가하여 자동 정렬을 트리거할 수 있습니다.")
+                        
                     except Exception as e:
-                        st.warning(f"데이터는 추가되었으나 정렬 중 오류가 발생했습니다: {str(e)[:100]}...")
+                        st.error(f"데이터 배치 추가 중 오류가 발생했습니다: {str(e)[:200]}...")
+                        st.info("Google Sheets API 할당량 제한으로 인한 오류일 수 있습니다. 다음 조치를 취하세요:")
+                        st.markdown("""
+                        1. 1-2시간 기다린 후 다시 시도하세요 (API 할당량이 재설정됨).
+                        2. 더 작은 파일로 나누어 업로드하세요 (행 수를 줄임).
+                        3. 단일 항목을 한 번에 하나씩 추가하세요.
+                        """)
+                        # 성공한 행 수가 있다면 표시
+                        if success_count > 0:
+                            st.info(f"{success_count}개 행은 성공적으로 추가되었습니다.")
         
         except Exception as e:
             st.error(f"파일 처리 중 오류가 발생했습니다: {str(e)}")
