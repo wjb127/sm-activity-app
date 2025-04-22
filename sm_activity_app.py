@@ -48,6 +48,9 @@ def get_or_create_spreadsheet(client, sheet_name):
         # 스프레드시트 열기 시도
         spreadsheet = client.open(sheet_name)
         st.info(f"기존 스프레드시트를 열었습니다: {sheet_name}")
+        
+        # 기본 권한 설정
+        spreadsheet.share('qhv147@gmail.com', perm_type='user', role='editor')
     except gspread.exceptions.SpreadsheetNotFound:
         # 스프레드시트가 없으면 새로 생성
         spreadsheet = client.create(sheet_name)
