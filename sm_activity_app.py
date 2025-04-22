@@ -165,6 +165,141 @@ if not worksheet:
     st.error("워크시트에 접근할 수 없습니다.")
     st.stop()
 
+# 스프레드시트 링크 항상 표시
+st.markdown(f"### 📊 [Google 스프레드시트에서 보기]({spreadsheet.url})")
+
+# 엑셀 파일 업로드 섹션 추가
+st.subheader("📤 엑셀 파일 업로드")
+with st.expander("엑셀 파일을 업로드하여 데이터 일괄 추가"):
+    # 샘플 템플릿 다운로드 기능 추가
+    st.markdown("#### 샘플 템플릿 다운로드")
+    sample_df = pd.DataFrame({
+        '구분': ['정기', '비정기'],
+        '작업유형': ['조간점검', '인프라 작업'],
+        'TASK': ['데일리 점검', '서버 업그레이드'],
+        '요청일': [datetime.today().strftime("%Y-%m-%d"), (datetime.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")],
+        '요청자': ['홍길동', '김철수'],
+        'IT': ['한상욱', '한상욱'],
+        'CNS': ['이정인', '이정인'],
+        '개발자': ['위승빈', '위승빈'],
+        '결과': ['완료', '진행 중']
+    })
+    
+    # 샘플 템플릿을 엑셀로 변환
+    sample_buffer = BytesIO()
+    with pd.ExcelWriter(sample_buffer, engine='openpyxl') as writer:
+        sample_df.to_excel(writer, index=False, sheet_name='SM Activity')
+    sample_buffer.seek(0)
+    
+    # 샘플 템플릿 다운로드 버튼
+    st.download_button(
+        label="📝 샘플 템플릿 다운로드",
+        data=sample_buffer,
+        file_name="SM_Activity_Template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="업로드 양식에 맞는 샘플 엑셀 템플릿을 다운로드합니다."
+    )
+    
+    st.markdown("---")
+    st.markdown("#### 데이터 업로드")
+    uploaded_file = st.file_uploader("SM Activity 양식의 엑셀 파일을 업로드하세요", type=["xlsx", "xls"])
+    
+    if uploaded_file is not None:
+        try:
+            # 엑셀 파일 읽기
+            df = pd.read_excel(uploaded_file, sheet_name=0)
+            
+            # 데이터프레임 미리보기 
+            st.write("업로드한 데이터 미리보기:")
+            st.dataframe(df.head(5))
+            
+            # 필요한 열이 있는지 확인
+            required_columns = ["구분", "작업유형", "TASK", "요청일", "요청자", "결과"]
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                st.error(f"업로드한 엑셀 파일에 다음 필수 열이 없습니다: {', '.join(missing_columns)}")
+            else:
+                # 업로드 버튼
+                if st.button("데이터 추가하기"):
+                    # 현재 워크시트의 모든 데이터 가져오기
+                    sheet_data = worksheet.get_all_values()
+                    # 헤더 행을 제외한 데이터 행 수 계산
+                    current_row_count = len(sheet_data) - 1 if len(sheet_data) > 0 else 0
+                    
+                    # 성공 및 실패 카운터
+                    success_count = 0
+                    error_count = 0
+                    
+                    # 진행 상황 표시
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # 각 행을 순회하면서 데이터 추가
+                    for index, row in df.iterrows():
+                        try:
+                            # 진행 상황 업데이트
+                            progress = (index + 1) / len(df)
+                            progress_bar.progress(progress)
+                            status_text.text(f"처리 중... {index + 1}/{len(df)}")
+                            
+                            # 요청일 처리 (날짜 형식 확인)
+                            try:
+                                if pd.isna(row.get('요청일')):
+                                    req_date = datetime.today()
+                                elif isinstance(row['요청일'], datetime):
+                                    req_date = row['요청일']
+                                else:
+                                    # 문자열인 경우 파싱 시도
+                                    req_date = datetime.strptime(str(row['요청일']), "%Y-%m-%d")
+                            except:
+                                req_date = datetime.today()
+                            
+                            # 작업일은 요청일과 동일하게 설정
+                            work_date = req_date
+                            
+                            # 새 행 번호 계산
+                            new_row_num = current_row_count + success_count + 1
+                            
+                            # 데이터 준비
+                            new_row_data = [
+                                str(new_row_num),  # NO
+                                req_date.strftime("%Y%m"),  # 월 정보
+                                str(row.get('구분', '')),  # 구분
+                                str(row.get('작업유형', '')),  # 작업유형
+                                str(row.get('TASK', '')),  # TASK
+                                req_date.strftime("%Y-%m-%d"),  # 요청일
+                                work_date.strftime("%Y-%m-%d"),  # 작업일
+                                str(row.get('요청자', '')),  # 요청자
+                                str(row.get('IT', 'IT 담당자')),  # IT 담당자
+                                str(row.get('CNS', 'CNS 담당자')),  # CNS 담당자
+                                str(row.get('개발자', '개발자')),  # 개발자
+                                str(row.get('내용', row.get('TASK', ''))),  # 내용
+                                str(row.get('결과', '완료'))  # 결과
+                            ]
+                            
+                            # Google 스프레드시트에 데이터 추가
+                            worksheet.append_row(new_row_data)
+                            success_count += 1
+                            
+                        except Exception as e:
+                            error_count += 1
+                            st.error(f"행 {index+1} 처리 중 오류 발생: {str(e)[:100]}...")
+                    
+                    # 진행 상황 완료
+                    progress_bar.progress(1.0)
+                    status_text.text("처리 완료!")
+                    
+                    # 요청일 기준으로 데이터 정렬
+                    try:
+                        sort_worksheet_by_date(worksheet)
+                        st.success(f"✅ 업로드 완료! 총 {success_count}개 행이 성공적으로 추가되었습니다. (오류: {error_count}개)")
+                    except Exception as e:
+                        st.warning(f"데이터는 추가되었으나 정렬 중 오류가 발생했습니다: {str(e)[:100]}...")
+        
+        except Exception as e:
+            st.error(f"파일 처리 중 오류가 발생했습니다: {str(e)}")
+
 # 폼 외부에 날짜 선택 UI 배치 (콜백 함수 사용 가능)
 st.subheader("📅 날짜 설정")
 col1, col2 = st.columns(2)
@@ -247,9 +382,6 @@ with st.form("activity_form"):
             # 성공 메시지 표시
             st.success(f"✅ {selected_sheet_name} 문서에 성공적으로 추가되었고, 날짜 순으로 정렬되었습니다.\n\n**추가된 작업:** {task}")
             
-            # 스프레드시트 링크 제공
-            st.markdown(f"[Google 스프레드시트에서 보기]({spreadsheet.url})")
-            
         except Exception as e:
             st.error(f"데이터 추가 중 오류가 발생했습니다: {e}")
 
@@ -305,7 +437,23 @@ with st.expander("ℹ️ 도움말 및 사용 방법"):
     4. 입력된 데이터는 자동으로 날짜순 정렬됩니다.
     5. 엑셀 파일을 다운로드하거나 Google 스프레드시트 링크를 통해 직접 확인할 수 있습니다.
     
+    ### 엑셀 파일 업로드
+    엑셀 파일을 통해 여러 데이터를 한 번에 추가할 수 있습니다:
+    
+    1. 업로드할 엑셀 파일은 다음 열들을 포함해야 합니다:
+       - **구분**: 정기/비정기
+       - **작업유형**: 조간점검, 재적재 등
+       - **TASK**: 작업 제목
+       - **요청일**: 날짜 형식 (YYYY-MM-DD)
+       - **요청자**: 요청자 이름
+       - **결과**: 진행 중, 완료, 보류, 기타
+       
+    2. "엑셀 파일을 업로드하여 데이터 일괄 추가" 섹션을 열고 파일을 선택합니다.
+    3. 데이터 미리보기를 확인한 후 "데이터 추가하기" 버튼을 클릭합니다.
+    4. 업로드된 모든 데이터는 요청일 기준으로 자동 정렬됩니다.
+    
     ### 주의사항
     - 데이터는 Google 스프레드시트에 저장되며, 권한이 있는 사용자만 접근할 수 있습니다.
+    - 대량의 데이터를 업로드할 경우 시간이 다소 소요될 수 있습니다.
     - 문제가 발생하면 관리자에게 문의하세요.
     """)
