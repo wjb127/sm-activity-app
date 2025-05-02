@@ -1,12 +1,13 @@
-# Python 관련
+# Streamlit secrets
+.streamlit/
+
+# Python 관련 파일
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -22,23 +23,25 @@ var/
 .installed.cfg
 *.egg
 
-# Streamlit 관련
-.streamlit/
+# 가상환경
+venv/
+ENV/
+env/
 
-# IDE 관련
+# IDE 관련 파일
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# OS 관련 파일
+.DS_Store
+Thumbs.db
 
 # 데이터 파일 (기본 템플릿 제외하고 업로드하지 않기)
 data/*
 !data/.gitkeep
 
 # Windows 관련
-Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
-
-# Mac OS 관련
-.DS_Store
