@@ -10,6 +10,13 @@ from io import BytesIO  # 메모리 내 파일 처리
 import logging  # 로깅을 위한 라이브러리
 import time  # 시간 처리를 위한 라이브러리
 
+# 페이지 기본 설정
+st.set_page_config(
+    page_title="SM Activity 기록 프로그램",
+    page_icon="🛠",
+    layout="centered"  # wide 대신 centered로 변경
+)
+
 # Google Sheets API 설정
 def setup_google_sheets():
     try:
@@ -313,8 +320,45 @@ def update_inquiry_resp_date():
     st.session_state.prev_inquiry_req_date = st.session_state.inquiry_req_date
     st.session_state.inquiry_resp_date = st.session_state.inquiry_req_date
 
-# Streamlit UI - 웹 애플리케이션 제목 설정
-st.title("🛠 SM Activity 기록 프로그램")
+# 앱 헤더 디자인 개선
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2rem !important;
+        font-weight: 600;
+        color: #1E88E5;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.1rem;
+        color: #424242;
+        margin-bottom: 2rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        border-radius: 4px 4px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #1E88E5;
+        color: white;
+    }
+    .block-container {
+        max-width: 1000px;  /* 콘텐츠 최대 너비 제한 */
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<p class="main-header">🛠 SM Activity 기록 프로그램</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Google Sheets API를 활용한 SM Activity 및 현업문의 관리 시스템</p>', unsafe_allow_html=True)
 
 # Google Sheets API 클라이언트 초기화
 gs_client = setup_google_sheets()
@@ -358,41 +402,35 @@ if not inquiry_worksheet:
     st.stop()
 
 # 스프레드시트 링크 항상 표시
-st.markdown(f"### 📊 Google 스프레드시트")
+st.markdown("### 📊 Google 스프레드시트")
+
+# 스프레드시트 정보를 카드 형태로 깔끔하게 표시
 st.markdown(f"""
 <div style='background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin-bottom: 15px;'>
     <p><strong>현재 선택된 스프레드시트:</strong> <a href='{spreadsheet.url}' target='_blank'>{google_sheet_name}</a></p>
-    
-    <details>
-        <summary><strong>모든 스프레드시트 링크</strong></summary>
-        <ul>
-""", unsafe_allow_html=True)
-
-# 모든 스프레드시트 링크 표시
-for sheet_label, sheet_name in sheet_options.items():
-    # 현재 선택된 시트인지 확인
-    is_current = sheet_name == google_sheet_name
-    try:
-        # 최적화된 함수를 사용하여 스프레드시트 정보 가져오기
-        sheet_info = get_spreadsheet_info(gs_client, sheet_name)
-        
-        if sheet_info["exists"]:
-            if is_current:
-                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_info['url']}' target='_blank'>{sheet_name}</a> (현재 선택됨)</li>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_info['url']}' target='_blank'>{sheet_name}</a></li>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<li><strong>{sheet_label}</strong>: {sheet_name} (아직 생성되지 않음)</li>", unsafe_allow_html=True)
-    except Exception as e:
-        st.markdown(f"<li><strong>{sheet_label}</strong>: {sheet_name} (링크 확인 중 오류 발생)</li>", unsafe_allow_html=True)
-
-st.markdown("""
-        </ul>
-    </details>
-    
-    <p><small>만약 접근 권한이 없다면 다시 앱을 로드하거나, 스프레드시트 소유자에게 권한을 요청하세요.</small></p>
 </div>
 """, unsafe_allow_html=True)
+
+# 사용 가능한 스프레드시트 목록을 더 깔끔하게 표시
+with st.expander("모든 스프레드시트 목록"):
+    for sheet_label, sheet_name in sheet_options.items():
+        # 현재 선택된 시트인지 확인
+        is_current = sheet_name == google_sheet_name
+        try:
+            # 최적화된 함수를 사용하여 스프레드시트 정보 가져오기
+            sheet_info = get_spreadsheet_info(gs_client, sheet_name)
+            
+            if sheet_info["exists"]:
+                if is_current:
+                    st.markdown(f"**{sheet_label}**: [{sheet_name}]({sheet_info['url']}) (현재 선택됨)")
+                else:
+                    st.markdown(f"**{sheet_label}**: [{sheet_name}]({sheet_info['url']})")
+            else:
+                st.markdown(f"**{sheet_label}**: {sheet_name} (아직 생성되지 않음)")
+        except Exception as e:
+            st.markdown(f"**{sheet_label}**: {sheet_name} (링크 확인 중 오류 발생)")
+    
+    st.info("접근 권한이 없다면 다시 앱을 로드하거나, 스프레드시트 소유자에게 권한을 요청하세요.")
 
 # 디버깅 정보를 사이드바에 추가
 with st.sidebar:
