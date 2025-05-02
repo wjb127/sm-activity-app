@@ -237,13 +237,38 @@ def refresh_worksheet_data():
     st.session_state['cache_refreshed'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # 페이지 자동 새로고침을 위한 플래그
     st.session_state['data_updated'] = True
+    
+# 성능 최적화를 위한 함수 추가
+@st.cache_data(ttl=600)  # 10분 동안 캐싱
+def get_spreadsheet_info(gs_client, sheet_name):
+    """스프레드시트 정보를 가져오고 캐싱합니다."""
+    try:
+        sheet = gs_client.open(sheet_name)
+        return {
+            "url": sheet.url,
+            "exists": True
+        }
+    except gspread.exceptions.SpreadsheetNotFound:
+        return {
+            "url": "#",
+            "exists": False
+        }
 
 # 세션 상태 초기화 - 요청일과 작업일 동기화를 위한 설정
 if 'req_date' not in st.session_state:
     st.session_state.req_date = datetime.today()
+    st.session_state.prev_req_date = datetime.today()
 
 if 'work_date' not in st.session_state:
     st.session_state.work_date = datetime.today()
+
+# 현업문의 요청일과 답변일 동기화를 위한 설정
+if 'inquiry_req_date' not in st.session_state:
+    st.session_state.inquiry_req_date = datetime.today()
+    st.session_state.prev_inquiry_req_date = datetime.today()
+
+if 'inquiry_resp_date' not in st.session_state:
+    st.session_state.inquiry_resp_date = datetime.today()
 
 # 데이터 캐시 관련 세션 상태 초기화
 if 'last_data_fetch' not in st.session_state:
@@ -268,8 +293,25 @@ def update_work_date():
     요청일이 변경될 때 작업일을 업데이트합니다.
     불필요한 재계산이나 API 호출을 하지 않습니다.
     """
+    # 이전 값과 동일하면 아무 작업도 수행하지 않음
+    if 'prev_req_date' in st.session_state and st.session_state.prev_req_date == st.session_state.req_date:
+        return
+
+    # 현재 값을 저장
+    st.session_state.prev_req_date = st.session_state.req_date
     st.session_state.work_date = st.session_state.req_date
     # 상태 변경만 수행하고 추가적인 처리는 하지 않음
+
+# 현업문의 요청일 변경 콜백 함수도 최적화
+def update_inquiry_resp_date():
+    """요청일이 변경될 때 답변일을 업데이트합니다."""
+    # 이전 값과 동일하면 아무 작업도 수행하지 않음
+    if 'prev_inquiry_req_date' in st.session_state and st.session_state.prev_inquiry_req_date == st.session_state.inquiry_req_date:
+        return
+
+    # 현재 값을 저장
+    st.session_state.prev_inquiry_req_date = st.session_state.inquiry_req_date
+    st.session_state.inquiry_resp_date = st.session_state.inquiry_req_date
 
 # Streamlit UI - 웹 애플리케이션 제목 설정
 st.title("🛠 SM Activity 기록 프로그램")
@@ -331,20 +373,14 @@ for sheet_label, sheet_name in sheet_options.items():
     # 현재 선택된 시트인지 확인
     is_current = sheet_name == google_sheet_name
     try:
-        # 해당 스프레드시트가 존재하는지 확인
-        sheet_exists = True
-        try:
-            temp_sheet = gs_client.open(sheet_name)
-            sheet_url = temp_sheet.url
-        except gspread.exceptions.SpreadsheetNotFound:
-            sheet_exists = False
-            sheet_url = "#"
+        # 최적화된 함수를 사용하여 스프레드시트 정보 가져오기
+        sheet_info = get_spreadsheet_info(gs_client, sheet_name)
         
-        if sheet_exists:
+        if sheet_info["exists"]:
             if is_current:
-                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_url}' target='_blank'>{sheet_name}</a> (현재 선택됨)</li>", unsafe_allow_html=True)
+                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_info['url']}' target='_blank'>{sheet_name}</a> (현재 선택됨)</li>", unsafe_allow_html=True)
             else:
-                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_url}' target='_blank'>{sheet_name}</a></li>", unsafe_allow_html=True)
+                st.markdown(f"<li><strong>{sheet_label}</strong>: <a href='{sheet_info['url']}' target='_blank'>{sheet_name}</a></li>", unsafe_allow_html=True)
         else:
             st.markdown(f"<li><strong>{sheet_label}</strong>: {sheet_name} (아직 생성되지 않음)</li>", unsafe_allow_html=True)
     except Exception as e:
@@ -647,7 +683,8 @@ with tab1:
             "요청일 선택", 
             key="req_date", 
             on_change=update_work_date,
-            help="요청일을 선택하면 작업일이 자동으로 같은 날짜로 설정됩니다."
+            help="요청일을 선택하면 작업일이 자동으로 같은 날짜로 설정됩니다.",
+            label_visibility="visible"
         )
     with date_col2:
         # 작업일 확인 도움말 추가
@@ -655,7 +692,8 @@ with tab1:
             "작업일 확인", 
             key="work_date", 
             disabled=True,
-            help="요청일과 자동으로 동기화됩니다. 별도 변경은 불가능합니다."
+            help="요청일과 자동으로 동기화됩니다. 별도 변경은 불가능합니다.",
+            label_visibility="visible"
         )
 
     # SM Activity 입력 양식 생성
@@ -1033,17 +1071,9 @@ with tab2:
     st.subheader("📅 날짜 설정")
 
     date_col1, date_col2 = st.columns(2)
-    # 세션 상태 초기화 - 요청일과 답변일을 위한 설정
-    if 'inquiry_req_date' not in st.session_state:
-        st.session_state.inquiry_req_date = datetime.today()
+    # 세션 상태 초기화 - 요청일과 답변일을 위한 설정은 이미 위에서 수행했으므로 제거
 
-    if 'inquiry_resp_date' not in st.session_state:
-        st.session_state.inquiry_resp_date = datetime.today()
-
-    # 요청일이 변경될 때 답변일을 업데이트하는 콜백 함수
-    def update_inquiry_resp_date():
-        """요청일이 변경될 때 답변일을 업데이트합니다."""
-        st.session_state.inquiry_resp_date = st.session_state.inquiry_req_date
+    # 요청일이 변경될 때 답변일을 업데이트하는 콜백 함수는 이미 위에서 정의했으므로 제거
 
     date_col1, date_col2 = st.columns(2)
     with date_col1:
@@ -1051,14 +1081,16 @@ with tab2:
             "요청일 선택", 
             key="inquiry_req_date", 
             on_change=update_inquiry_resp_date,
-            help="요청일을 선택하면 답변일이 자동으로 같은 날짜로 설정됩니다."
+            help="요청일을 선택하면 답변일이 자동으로 같은 날짜로 설정됩니다.",
+            label_visibility="visible"
         )
     with date_col2:
         st.date_input(
             "답변일 확인", 
             key="inquiry_resp_date", 
             disabled=True,
-            help="요청일과 자동으로 동기화됩니다. 별도 변경은 불가능합니다."
+            help="요청일과 자동으로 동기화됩니다. 별도 변경은 불가능합니다.",
+            label_visibility="visible"
         )
 
     # 현업문의 입력 양식 생성
